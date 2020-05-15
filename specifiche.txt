@@ -4,7 +4,7 @@ il processo padre per comunicare con il processo figlio prepara:
 
 il processo padre manda i dati al processo figlio attraverso la pipe
 
-il processo figlio restituisce il risultato attraverso la memory map convidisa
+il processo figlio restituisce il risultato attraverso la memory map convidisa (che può essere anonima o basata su file).
 
 il processo padre prende come argomento a linea di comando un nome di file.
 il processo padre legge il file e manda i contenuti attraverso la pipe al processo figlio.
