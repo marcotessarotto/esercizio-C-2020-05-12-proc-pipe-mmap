@@ -10,13 +10,23 @@
 #include <fcntl.h>
 // for mmap
 #include <sys/mman.h>
+// for sha512
+#include <openssl/evp.h>
+#include <string.h>
 
 
 void child_proces(void);
 void father_proces(void);
 
+
+#define HANDLE_ERROR(msg) { fprintf(stderr, "%s\n", msg); exit(EXIT_FAILURE); }
+#define HANDLE_ERROR2(msg, mdctx) { fprintf(stderr, "%s\n", msg); EVP_MD_CTX_destroy(mdctx); exit(EXIT_FAILURE); }
+
 #define BUFFER_SIZE 1024
+#define MAP_SIZE 64
+
 int pfd[2];
+char * addr;
 
 int main(int argc, char *argv[])
 {
@@ -29,12 +39,19 @@ int main(int argc, char *argv[])
 		exit(EXIT_FAILURE);
 	}
 
-	char * addr = mmap(NULL, // NULL: è il kernel a scegliere l'indirizzo
-			file_size, // dimensione della memory map
+	size_t size = 64;
+	// create memory map
+	addr = mmap(NULL, // NULL: è il kernel a scegliere l'indirizzo
+			size, // dimensione della memory map
 			PROT_READ | PROT_WRITE, // memory map leggibile e scrivibile
-			MAP_SHARED, // memory map condivisibile con altri processi
-			fd,
+			MAP_SHARED | MAP_ANONYMOUS, // memory map condivisibile con altri processi
+			-1,
 			0); // offset nel file
+	if (addr == MAP_FAILED) {
+		printf("ciao3");
+		perror("mmap()");
+		exit(EXIT_FAILURE);
+	}
 
 	pid_t child = fork();
 
@@ -44,8 +61,7 @@ int main(int argc, char *argv[])
 			exit(1);
 		case 0:
 			child_proces();
-			break;
-
+			exit(0);
 		default :
 		{
 			father_proces();
@@ -57,6 +73,8 @@ int main(int argc, char *argv[])
 			}
 		}
 	} // end of switch
+
+	printf("father: %s\n", addr);
 
     exit(0);
 }
@@ -75,12 +93,35 @@ void child_proces(void){
     ssize_t bytesRead;
     char * buffer;
 
+    // from sha512
+    EVP_MD_CTX * mdctx;
+	int val;
+	unsigned char * digest;
+	unsigned int digest_len;
+	EVP_MD * algo = NULL;
+
+	algo = EVP_sha3_512();
+
+	if ((mdctx = EVP_MD_CTX_create()) == NULL) {
+		HANDLE_ERROR("EVP_MD_CTX_create() error")
+	}
+
+	// initialize digest engine
+	if (EVP_DigestInit_ex(mdctx, algo, NULL) != 1) { // returns 1 if successful
+		HANDLE_ERROR2("EVP_DigestInit_ex() error", mdctx)
+	}
+
 
 
 	while ((bytesRead = read(pfd[0], buffer, BUFFER_SIZE)) > 0) {
 		// TEST
 		for(int i=0 ; i< bytesRead ; i++){
 			printf("%c", buffer[i]);
+		}
+
+		// provide data to digest engine
+		if (EVP_DigestUpdate(mdctx, buffer, bytesRead) != 1) { // returns 1 if successful
+			HANDLE_ERROR2("EVP_DigestUpdate() error", mdctx)
 		}
 
 		// buffer for next read
@@ -90,6 +131,32 @@ void child_proces(void){
 	    	exit(1);
 	    }
 	}
+
+	digest_len = EVP_MD_size(algo); // sha3_512 returns a 512 bit hash
+
+	if ((digest = (unsigned char *)OPENSSL_malloc(digest_len)) == NULL) {
+		HANDLE_ERROR2("OPENSSL_malloc() error", mdctx);
+	}
+
+	// produce digest
+	if (EVP_DigestFinal_ex(mdctx, digest, &digest_len) != 1) { // returns 1 if successful
+		OPENSSL_free(digest);
+		HANDLE_ERROR2("EVP_DigestFinal_ex() error", mdctx)
+	}
+
+	char * result = malloc(digest_len);
+	if (result == NULL) {
+		perror("malloc()");
+		exit(EXIT_FAILURE);
+	}
+
+	memcpy(result, digest, digest_len);
+	memcpy(addr, digest, digest_len);
+
+	OPENSSL_free(digest);
+	EVP_MD_CTX_destroy(mdctx);
+	printf("child: %s\n", addr);
+
 }
 
 
